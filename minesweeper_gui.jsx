@@ -1009,11 +1009,41 @@ export default function MinesweeperSolver() {
   const flagCount = board.flat().filter(c => c === FLAG).length;
   const minesRemaining = totalMines - flagCount;
 
+  // Frontier set: unknown cells touching a numbered cell. Clicking a
+  // frontier cell tends to collapse local constraints, so when the
+  // probability gap to a non-frontier candidate is small we'd rather
+  // take the frontier guess for the information yield.
+  const FRONTIER_BONUS = 0.04; // 4 percentage points
+  const frontierSet = new Set();
+  if (results?.probabilities) {
+    for (let r = 0; r < board.length; r++) {
+      for (let c = 0; c < board[r].length; c++) {
+        if (board[r][c] !== UNKNOWN) continue;
+        let touchesNumber = false;
+        for (let dr = -1; dr <= 1 && !touchesNumber; dr++) {
+          for (let dc = -1; dc <= 1 && !touchesNumber; dc++) {
+            if (dr === 0 && dc === 0) continue;
+            const nr = r + dr, nc = c + dc;
+            if (nr < 0 || nr >= board.length || nc < 0 || nc >= board[0].length) continue;
+            if (typeof board[nr][nc] === "number" && board[nr][nc] > 0) touchesNumber = true;
+          }
+        }
+        if (touchesNumber) frontierSet.add(`${r},${c}`);
+      }
+    }
+  }
+
   let recommendations = [];
   if (results?.probabilities) {
     recommendations = Object.entries(results.probabilities)
-      .map(([k, p]) => ({ key: k, r: +k.split(",")[0], c: +k.split(",")[1], prob: p }))
-      .sort((a, b) => a.prob - b.prob);
+      .map(([k, p]) => {
+        const r = +k.split(",")[0], c = +k.split(",")[1];
+        const frontier = frontierSet.has(k);
+        // Effective probability for ranking; the displayed prob stays raw.
+        const rankProb = frontier ? Math.max(0, p - FRONTIER_BONUS) : p;
+        return { key: k, r, c, prob: p, frontier, rankProb };
+      })
+      .sort((a, b) => a.rankProb - b.rankProb);
   }
 
   return (
@@ -1141,9 +1171,14 @@ export default function MinesweeperSolver() {
 
               {recommendations.length > 0 && (
                 <div className="mt-2">
-                  <div className="text-xs font-semibold text-gray-400 mb-1">Top moves</div>
+                  <div className="text-xs font-semibold text-gray-400 mb-1 flex items-center justify-between">
+                    <span>Top moves</span>
+                    <span className="text-[10px] font-normal text-gray-500">
+                      <span className="text-blue-400">F</span> = frontier
+                    </span>
+                  </div>
                   <div className="max-h-40 overflow-y-auto space-y-0.5">
-                    {recommendations.slice(0, 12).map(({ r, c, prob }) => (
+                    {recommendations.slice(0, 12).map(({ r, c, prob, frontier }) => (
                       <div key={`${r},${c}`} className="flex items-center gap-1 text-xs">
                         <div className="w-14 h-2.5 bg-gray-800 rounded-full overflow-hidden">
                           <div className="h-full rounded-full" style={{
@@ -1155,6 +1190,7 @@ export default function MinesweeperSolver() {
                           color: prob < 0.05 ? "#4ade80" : prob > 0.9 ? "#f87171" : "#fbbf24"
                         }}>{(prob * 100).toFixed(0)}%</span>
                         <span className="text-gray-500">({r},{c})</span>
+                        {frontier && <span className="text-blue-400 text-[10px]">F</span>}
                       </div>
                     ))}
                   </div>
@@ -1162,6 +1198,9 @@ export default function MinesweeperSolver() {
                     <div className="mt-2 p-1.5 bg-green-900/30 border border-green-800 rounded text-xs">
                       Best: <span className="text-green-400 font-bold">({recommendations[0].r},{recommendations[0].c})</span>
                       {" "}{(recommendations[0].prob * 100).toFixed(1)}%
+                      {recommendations[0].frontier && (
+                        <span className="text-blue-300 ml-1">(frontier)</span>
+                      )}
                     </div>
                   )}
                 </div>
