@@ -467,45 +467,49 @@ function detectGridSize(canvas, gridRect, fallbackRows, fallbackCols) {
   }
   for (let x = 0; x < w; x++) colP[x] /= (3 * h);
 
-  // Find the period p that minimises mean squared difference between
-  // the profile and itself shifted by p. Periodic signals dip near
-  // multiples of the true period; prefer the smallest one.
+  // Mean-centred autocorrelation. The true cell pitch shows up as the
+  // first significant local maximum after lag 0.
   const findPeriod = (profile, minP, maxP) => {
     const n = profile.length;
-    if (maxP <= minP) return minP;
-    const ssd = new Float32Array(maxP - minP + 1);
-    let bestP = minP, bestSSD = Infinity;
-    for (let p = minP; p <= maxP; p++) {
+    if (maxP <= minP + 2 || n < 32) return null;
+    let mean = 0;
+    for (let i = 0; i < n; i++) mean += profile[i];
+    mean /= n;
+    const centered = new Float32Array(n);
+    for (let i = 0; i < n; i++) centered[i] = profile[i] - mean;
+
+    const len = maxP + 2;
+    const A = new Float32Array(len);
+    for (let p = 0; p < len; p++) {
       const pairs = n - p;
+      if (pairs <= 0) { A[p] = 0; continue; }
       let s = 0;
-      for (let i = 0; i < pairs; i++) {
-        const d = profile[i] - profile[i + p];
-        s += d * d;
-      }
-      s /= pairs;
-      ssd[p - minP] = s;
-      if (s < bestSSD) { bestSSD = s; bestP = p; }
+      for (let i = 0; i < pairs; i++) s += centered[i] * centered[i + p];
+      A[p] = s / pairs;
     }
-    // If a sub-multiple of bestP scores nearly as well, prefer it
-    // (handles cases where the optimiser locked onto 2× the true period).
-    for (let div = 6; div >= 2; div--) {
-      const subP = Math.round(bestP / div);
-      if (subP < minP || subP > maxP) continue;
-      if (ssd[subP - minP] <= bestSSD * 1.25) {
-        bestP = subP;
-        bestSSD = ssd[subP - minP];
+    if (A[0] <= 0) return null;
+    const threshold = A[0] * 0.2;
+
+    let firstPeak = null;
+    for (let p = minP; p <= maxP; p++) {
+      if (A[p] > A[p - 1] && A[p] > A[p + 1] && A[p] >= threshold) {
+        firstPeak = p;
+        break;
       }
     }
-    return bestP;
+    return firstPeak;
   };
 
   const colPeriod = findPeriod(colP, 8, Math.max(9, Math.floor(w / 3)));
   const rowPeriod = findPeriod(rowP, 8, Math.max(9, Math.floor(h / 3)));
 
-  return {
-    cols: Math.max(1, Math.round(w / colPeriod)),
-    rows: Math.max(1, Math.round(h / rowPeriod))
-  };
+  const cols = colPeriod ? Math.max(1, Math.round(w / colPeriod)) : fallbackCols;
+  const rows = rowPeriod ? Math.max(1, Math.round(h / rowPeriod)) : fallbackRows;
+  if (typeof window !== "undefined" && window.console) {
+    // eslint-disable-next-line no-console
+    console.log("[grid-detect]", { rectW: w, rectH: h, colPeriod, rowPeriod, cols, rows });
+  }
+  return { cols, rows };
 }
 
 function scanImage(canvas, gridRect, gridRows, gridCols) {
@@ -741,23 +745,31 @@ function ScannerModal({ image, gridRows, gridCols, onApply, onClose }) {
               background: "rgba(59,130,246,0.1)",
               pointerEvents: "none"
             }}>
-              {/* Grid lines */}
-              {Array.from({ length: gridCols - 1 }, (_, i) => (
-                <div key={`v${i}`} style={{
-                  position: "absolute",
-                  left: `${((i + 1) / gridCols) * 100}%`, top: 0,
-                  width: "1px", height: "100%",
-                  background: "rgba(59,130,246,0.3)"
-                }} />
-              ))}
-              {Array.from({ length: gridRows - 1 }, (_, i) => (
-                <div key={`h${i}`} style={{
-                  position: "absolute",
-                  top: `${((i + 1) / gridRows) * 100}%`, left: 0,
-                  height: "1px", width: "100%",
-                  background: "rgba(59,130,246,0.3)"
-                }} />
-              ))}
+              {/* Grid lines (reflect detected dims after Detect) */}
+              {(() => {
+                const oc = preview?.cols ?? gridCols;
+                const orw = preview?.rows ?? gridRows;
+                return (
+                  <>
+                    {Array.from({ length: oc - 1 }, (_, i) => (
+                      <div key={`v${i}`} style={{
+                        position: "absolute",
+                        left: `${((i + 1) / oc) * 100}%`, top: 0,
+                        width: "1px", height: "100%",
+                        background: "rgba(59,130,246,0.35)"
+                      }} />
+                    ))}
+                    {Array.from({ length: orw - 1 }, (_, i) => (
+                      <div key={`h${i}`} style={{
+                        position: "absolute",
+                        top: `${((i + 1) / orw) * 100}%`, left: 0,
+                        height: "1px", width: "100%",
+                        background: "rgba(59,130,246,0.35)"
+                      }} />
+                    ))}
+                  </>
+                );
+              })()}
 
               {/* Corner handles */}
               {[
@@ -822,7 +834,8 @@ function ScannerModal({ image, gridRows, gridCols, onApply, onClose }) {
       {/* Tips bar */}
       <div className="bg-gray-900 w-full p-2 border-t border-gray-700 text-xs text-gray-500 text-center">
         Drag corners to resize | Drag inside to move | Click outside to draw new selection |
-        Grid: {gridRows} rows x {gridCols} cols
+        Grid: {preview?.rows ?? gridRows} rows x {preview?.cols ?? gridCols} cols
+        {preview && <span className="text-blue-400"> (auto-detected)</span>}
       </div>
     </div>
   );
