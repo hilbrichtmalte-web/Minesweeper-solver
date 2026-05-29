@@ -757,10 +757,10 @@ const makeEmptyBoard = (r, c) =>
   Array.from({ length: r }, () => Array(c).fill(EMPTY));
 
 export default function MinesweeperSolver() {
-  const [rows, setRows] = useState(32);
-  const [cols, setCols] = useState(35);
-  const [totalMines, setTotalMines] = useState(225);
-  const [board, setBoard] = useState(() => makeEmptyBoard(32, 35));
+  const [rows, setRows] = useState(28);
+  const [cols, setCols] = useState(16);
+  const [totalMines, setTotalMines] = useState(75);
+  const [board, setBoard] = useState(() => makeEmptyBoard(28, 16));
   const [paintMode, setPaintMode] = useState(UNKNOWN);
   const [results, setResults] = useState(null);
   const [isPainting, setIsPainting] = useState(false);
