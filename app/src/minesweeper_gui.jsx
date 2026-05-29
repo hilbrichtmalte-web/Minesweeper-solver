@@ -438,6 +438,76 @@ function classifyCell(raw) {
   return EMPTY;
 }
 
+// Estimate the grid dimensions (rows × cols) inside a rectangle by
+// detecting the dominant brightness period along each axis. Works on
+// any theme that has a repeating cell pattern (lines or 3D borders).
+function detectGridSize(canvas, gridRect, fallbackRows, fallbackCols) {
+  const ctx = canvas.getContext("2d");
+  const x0 = Math.max(0, Math.floor(gridRect.x));
+  const y0 = Math.max(0, Math.floor(gridRect.y));
+  const w = Math.min(canvas.width - x0, Math.floor(gridRect.w));
+  const h = Math.min(canvas.height - y0, Math.floor(gridRect.h));
+  if (w < 16 || h < 16) return { rows: fallbackRows, cols: fallbackCols };
+
+  const imageData = ctx.getImageData(x0, y0, w, h);
+  const { data } = imageData;
+
+  // Per-column and per-row mean brightness profiles.
+  const colP = new Float32Array(w);
+  const rowP = new Float32Array(h);
+  for (let y = 0; y < h; y++) {
+    let rowSum = 0;
+    for (let x = 0; x < w; x++) {
+      const idx = (y * w + x) * 4;
+      const b = data[idx] + data[idx + 1] + data[idx + 2];
+      colP[x] += b;
+      rowSum += b;
+    }
+    rowP[y] = rowSum / (3 * w);
+  }
+  for (let x = 0; x < w; x++) colP[x] /= (3 * h);
+
+  // Find the period p that minimises mean squared difference between
+  // the profile and itself shifted by p. Periodic signals dip near
+  // multiples of the true period; prefer the smallest one.
+  const findPeriod = (profile, minP, maxP) => {
+    const n = profile.length;
+    if (maxP <= minP) return minP;
+    const ssd = new Float32Array(maxP - minP + 1);
+    let bestP = minP, bestSSD = Infinity;
+    for (let p = minP; p <= maxP; p++) {
+      const pairs = n - p;
+      let s = 0;
+      for (let i = 0; i < pairs; i++) {
+        const d = profile[i] - profile[i + p];
+        s += d * d;
+      }
+      s /= pairs;
+      ssd[p - minP] = s;
+      if (s < bestSSD) { bestSSD = s; bestP = p; }
+    }
+    // If a sub-multiple of bestP scores nearly as well, prefer it
+    // (handles cases where the optimiser locked onto 2× the true period).
+    for (let div = 6; div >= 2; div--) {
+      const subP = Math.round(bestP / div);
+      if (subP < minP || subP > maxP) continue;
+      if (ssd[subP - minP] <= bestSSD * 1.25) {
+        bestP = subP;
+        bestSSD = ssd[subP - minP];
+      }
+    }
+    return bestP;
+  };
+
+  const colPeriod = findPeriod(colP, 8, Math.max(9, Math.floor(w / 3)));
+  const rowPeriod = findPeriod(rowP, 8, Math.max(9, Math.floor(h / 3)));
+
+  return {
+    cols: Math.max(1, Math.round(w / colPeriod)),
+    rows: Math.max(1, Math.round(h / rowPeriod))
+  };
+}
+
 function scanImage(canvas, gridRect, gridRows, gridCols) {
   const ctx = canvas.getContext("2d");
   const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
@@ -604,8 +674,11 @@ function ScannerModal({ image, gridRows, gridCols, onApply, onClose }) {
       w: Math.abs(rect.w),
       h: Math.abs(rect.h)
     };
-    const result = scanImage(canvasRef.current, normalized, gridRows, gridCols);
-    setPreview(result);
+    const detected = detectGridSize(canvasRef.current, normalized, gridRows, gridCols);
+    const useRows = Math.max(1, Math.min(100, detected.rows));
+    const useCols = Math.max(1, Math.min(100, detected.cols));
+    const result = scanImage(canvasRef.current, normalized, useRows, useCols);
+    setPreview({ ...result, rows: useRows, cols: useCols });
   }, [rect, gridRows, gridCols]);
 
   const applyDetection = useCallback(() => {
@@ -706,10 +779,15 @@ function ScannerModal({ image, gridRows, gridCols, onApply, onClose }) {
         {preview && (
           <div className="flex-shrink-0 bg-gray-900 rounded border border-gray-700 p-3 overflow-auto"
             style={{ maxHeight: "70vh" }}>
-            <div className="text-xs font-semibold text-gray-400 mb-2 uppercase">Detection Preview</div>
+            <div className="flex items-center justify-between mb-2">
+              <div className="text-xs font-semibold text-gray-400 uppercase">Detection Preview</div>
+              <div className="text-xs text-blue-300">
+                Detected: <span className="font-mono">{preview.rows ?? gridRows} × {preview.cols ?? gridCols}</span>
+              </div>
+            </div>
             <div style={{
               display: "inline-grid",
-              gridTemplateColumns: `repeat(${gridCols}, 20px)`,
+              gridTemplateColumns: `repeat(${preview.cols ?? gridCols}, 20px)`,
               gap: "1px"
             }}>
               {preview.board.map((row, r) =>
