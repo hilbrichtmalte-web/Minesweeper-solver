@@ -349,6 +349,12 @@ function analyzeCell(imageData, x, y, cellW, cellH) {
   const colorRatio = colorPixels / tCount;
   const darkRatio = darkPixels / tCount;
 
+  // Mean color of the saturated text pixels only. This is what tells red
+  // (low blue) apart from pink/purple (high blue) reliably.
+  const colAvgR = colorPixels > 0 ? maxColorR / colorPixels : 0;
+  const colAvgG = colorPixels > 0 ? maxColorG / colorPixels : 0;
+  const colAvgB = colorPixels > 0 ? maxColorB / colorPixels : 0;
+
   // Sample the four cell corners to detect a 3D raised border: covered
   // tiles are brighter at the top-left and darker at the bottom-right.
   // Revealed tiles are flat. This is theme-independent and discriminates
@@ -379,6 +385,7 @@ function analyzeCell(imageData, x, y, cellW, cellH) {
     type: "raw",
     avgR, avgG, avgB, avgBright, brightRange,
     textAvgR, textAvgG, textAvgB,
+    colAvgR, colAvgG, colAvgB,
     colorRatio, darkRatio,
     hasRed, hasGreen, hasBlue, hasPurple,
     colorPixels, darkPixels, tCount,
@@ -392,6 +399,7 @@ function classifyCell(raw) {
   const { avgBright, brightRange, colorRatio, darkRatio,
     hasRed, hasGreen, hasBlue, hasPurple, colorPixels, tCount, darkPixels,
     textAvgR, textAvgG, textAvgB, avgR, avgG, avgB,
+    colAvgR, colAvgG, colAvgB,
     raisedScore } = raw;
 
   const avgSat = Math.max(avgR, avgG, avgB) - Math.min(avgR, avgG, avgB);
@@ -403,25 +411,36 @@ function classifyCell(raw) {
     if (redDominance > 2 && hasGreen < hasRed * 0.3) return FLAG;
   }
 
-  // Number detection by dominant saturated text color.
+  // Number detection by averaging the colour of all saturated text pixels.
+  // This is more robust than per-pixel bucket counts because anti-aliased
+  // edge pixels of a pink "4" can otherwise tip into the red bucket and
+  // outvote the real pink core. The decisive feature for 3 vs 4 is the
+  // blue level: red sits around B/R ≈ 0.3, magenta around B/R ≈ 0.9.
   if (colorPixels > 3) {
-    const cr = hasRed, cg = hasGreen, cb = hasBlue, cp = hasPurple;
-    const total = cr + cg + cb + cp;
-    if (total > 2) {
-      if (cb > cg && cb > cr && cb > cp) return 1;
-      if (cg > cr && cg > cb && cg > cp) return 2;
-      if (cr > cg && cr > cb && cr > cp) return 3;
-      if (cp > cr && cp > cg && cp > cb) return 4;
+    const cr = colAvgR, cg = colAvgG, cb = colAvgB;
+    const mx = Math.max(cr, cg, cb);
+    // Blue glyph: 1
+    if (cb === mx && cb - cr > 25 && cb - cg > 25) return 1;
+    // Green glyph: 2
+    if (cg === mx && cg - cr > 15 && cg - cb > 15) return 2;
+    // Orange glyph: 5 (R high, G mid, B low). Check before red so red doesn't catch it.
+    if (cr > 140 && cg > 90 && cg < cr * 0.8 && cb < 90) return 5;
+    // Red-dominant family: split red(3) vs magenta(4) by blue level.
+    if (cr > 120 && cg < cr * 0.7) {
+      return cb > cr * 0.55 ? 4 : 3;
     }
   }
 
-  // Subtle text colors via the text-region average.
+  // Subtle text colors via the text-region average (fallback for thin glyphs
+  // where colorPixels is low). Use the same B/R logic for 3 vs 4.
   const textSat = Math.max(textAvgR, textAvgG, textAvgB) - Math.min(textAvgR, textAvgG, textAvgB);
   if (textSat > 15 && colorRatio > 0.02) {
     if (textAvgB > textAvgR + 20 && textAvgB > textAvgG + 20) return 1;
     if (textAvgG > textAvgR + 15 && textAvgG > textAvgB + 15) return 2;
-    if (textAvgR > textAvgG + 20 && textAvgR > textAvgB + 20) return 3;
-    if (textAvgB > textAvgG + 10 && textAvgR > textAvgG + 5) return 4;
+    if (textAvgR > 130 && textAvgG > 90 && textAvgG < textAvgR * 0.85 && textAvgB < 100) return 5;
+    if (textAvgR > textAvgG + 10) {
+      return textAvgB > textAvgR * 0.7 ? 4 : 3;
+    }
   }
 
   // Dark glyph on a bright cell = 7 (or 8 — same color in most themes).
