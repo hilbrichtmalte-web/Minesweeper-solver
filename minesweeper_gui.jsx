@@ -880,11 +880,29 @@ function ScannerModal({ image, gridRows, gridCols, onApply, onClose }) {
 const makeEmptyBoard = (r, c) =>
   Array.from({ length: r }, () => Array(c).fill(EMPTY));
 
+// Persist the user's last-used grid dimensions and mine count across
+// reloads. Falls back silently if localStorage is unavailable.
+const LS_KEYS = { rows: "ms:rows", cols: "ms:cols", mines: "ms:mines" };
+const loadInt = (key, fallback) => {
+  try {
+    const v = window.localStorage.getItem(key);
+    const n = v == null ? NaN : parseInt(v, 10);
+    return Number.isFinite(n) && n >= 1 ? n : fallback;
+  } catch {
+    return fallback;
+  }
+};
+const saveInt = (key, value) => {
+  try { window.localStorage.setItem(key, String(value)); } catch { /* ignore */ }
+};
+
 export default function MinesweeperSolver() {
-  const [rows, setRows] = useState(28);
-  const [cols, setCols] = useState(16);
-  const [totalMines, setTotalMines] = useState(75);
-  const [board, setBoard] = useState(() => makeEmptyBoard(28, 16));
+  const [rows, setRows] = useState(() => loadInt(LS_KEYS.rows, 28));
+  const [cols, setCols] = useState(() => loadInt(LS_KEYS.cols, 16));
+  const [totalMines, setTotalMines] = useState(() => loadInt(LS_KEYS.mines, 75));
+  const [board, setBoard] = useState(() =>
+    makeEmptyBoard(loadInt(LS_KEYS.rows, 28), loadInt(LS_KEYS.cols, 16))
+  );
   const [paintMode, setPaintMode] = useState(UNKNOWN);
   const [results, setResults] = useState(null);
   const [isPainting, setIsPainting] = useState(false);
@@ -892,6 +910,11 @@ export default function MinesweeperSolver() {
   const [zoom, setZoom] = useState(100);
   const [scannerImage, setScannerImage] = useState(null);
   const boardRef = useRef(null);
+
+  // Persist dimensions and mine count whenever they change.
+  useEffect(() => { saveInt(LS_KEYS.rows, rows); }, [rows]);
+  useEffect(() => { saveInt(LS_KEYS.cols, cols); }, [cols]);
+  useEffect(() => { saveInt(LS_KEYS.mines, totalMines); }, [totalMines]);
 
   const resizeRows = useCallback((newRows) => {
     setRows(newRows);
