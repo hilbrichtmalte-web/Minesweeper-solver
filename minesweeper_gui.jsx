@@ -732,11 +732,14 @@ function ScannerModal({ image, gridRows, gridCols, onApply, onClose }) {
 
 // ─── Main App ────────────────────────────────────────────────────────
 
+const makeEmptyBoard = (r, c) =>
+  Array.from({ length: r }, () => Array(c).fill(EMPTY));
+
 export default function MinesweeperSolver() {
   const [rows, setRows] = useState(32);
   const [cols, setCols] = useState(35);
   const [totalMines, setTotalMines] = useState(225);
-  const [board, setBoard] = useState(null);
+  const [board, setBoard] = useState(() => makeEmptyBoard(32, 35));
   const [paintMode, setPaintMode] = useState(UNKNOWN);
   const [results, setResults] = useState(null);
   const [isPainting, setIsPainting] = useState(false);
@@ -744,18 +747,21 @@ export default function MinesweeperSolver() {
   const [zoom, setZoom] = useState(100);
   const [scannerImage, setScannerImage] = useState(null);
   const boardRef = useRef(null);
-  const skipNextResetRef = useRef(false);
 
-  // Initialize board on dimension change (skipped when a scan is being applied)
-  useEffect(() => {
-    if (skipNextResetRef.current) {
-      skipNextResetRef.current = false;
-      return;
-    }
-    const b = Array.from({ length: rows }, () => Array(cols).fill(EMPTY));
-    setBoard(b);
+  const resizeRows = useCallback((newRows) => {
+    setRows(newRows);
+    setBoard(prev => {
+      const cs = prev[0]?.length ?? cols;
+      return makeEmptyBoard(newRows, cs);
+    });
     setResults(null);
-  }, [rows, cols]);
+  }, [cols]);
+
+  const resizeCols = useCallback((newCols) => {
+    setCols(newCols);
+    setBoard(prev => makeEmptyBoard(prev.length, newCols));
+    setResults(null);
+  }, []);
 
   // Paste handler for screenshots
   useEffect(() => {
@@ -820,25 +826,19 @@ export default function MinesweeperSolver() {
   }, [board, rows, cols, totalMines]);
 
   const clearBoard = useCallback(() => {
-    const b = Array.from({ length: rows }, () => Array(cols).fill(EMPTY));
-    setBoard(b);
+    setBoard(makeEmptyBoard(rows, cols));
     setResults(null);
   }, [rows, cols]);
 
   const handleScanApply = useCallback((scannedBoard) => {
     const newRows = scannedBoard.length;
     const newCols = scannedBoard[0]?.length || 0;
-    // Tell the dim-change effect to skip its reset, otherwise it would
-    // wipe the board we are about to set.
-    if (newRows !== rows || newCols !== cols) {
-      skipNextResetRef.current = true;
-    }
     setRows(newRows);
     setCols(newCols);
     setBoard(scannedBoard);
     setResults(null);
     setScannerImage(null);
-  }, [rows, cols]);
+  }, []);
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -895,11 +895,11 @@ export default function MinesweeperSolver() {
           <div className="flex items-center gap-2 flex-wrap">
             <label className="text-xs text-gray-400">Rows:</label>
             <input type="number" value={rows} min={1} max={100}
-              onChange={e => setRows(Math.max(1, Math.min(100, +e.target.value)))}
+              onChange={e => resizeRows(Math.max(1, Math.min(100, +e.target.value)))}
               className="w-14 bg-gray-800 border border-gray-600 rounded px-1 py-0.5 text-xs text-center" />
             <label className="text-xs text-gray-400">Cols:</label>
             <input type="number" value={cols} min={1} max={100}
-              onChange={e => setCols(Math.max(1, Math.min(100, +e.target.value)))}
+              onChange={e => resizeCols(Math.max(1, Math.min(100, +e.target.value)))}
               className="w-14 bg-gray-800 border border-gray-600 rounded px-1 py-0.5 text-xs text-center" />
             <label className="text-xs text-gray-400">Mines:</label>
             <input type="number" value={totalMines} min={0} max={rows * cols}
