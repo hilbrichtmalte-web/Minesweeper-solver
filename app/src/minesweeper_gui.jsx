@@ -674,7 +674,7 @@ function ScannerModal({ image, gridRows, gridCols, onApply, onClose }) {
                   position: "absolute", ...pos,
                   width: 10, height: 10,
                   background: "#3b82f6", borderRadius: "50%",
-                  pointerEvents: "auto", cursor: ["nwse-resize", "nesw-resize", "nesw-resize", "nwse-resize"][i]
+                  pointerEvents: "none"
                 }} />
               ))}
             </div>
@@ -744,9 +744,14 @@ export default function MinesweeperSolver() {
   const [zoom, setZoom] = useState(100);
   const [scannerImage, setScannerImage] = useState(null);
   const boardRef = useRef(null);
+  const skipNextResetRef = useRef(false);
 
-  // Initialize board
+  // Initialize board on dimension change (skipped when a scan is being applied)
   useEffect(() => {
+    if (skipNextResetRef.current) {
+      skipNextResetRef.current = false;
+      return;
+    }
     const b = Array.from({ length: rows }, () => Array(cols).fill(EMPTY));
     setBoard(b);
     setResults(null);
@@ -821,18 +826,18 @@ export default function MinesweeperSolver() {
   }, [rows, cols]);
 
   const handleScanApply = useCallback((scannedBoard) => {
-    // Adjust rows/cols if needed
     const newRows = scannedBoard.length;
     const newCols = scannedBoard[0]?.length || 0;
-    if (newRows !== rows) setRows(newRows);
-    if (newCols !== cols) setCols(newCols);
-
-    // Apply after state update
-    setTimeout(() => {
-      setBoard(scannedBoard);
-      setScannerImage(null);
-      setResults(null);
-    }, 50);
+    // Tell the dim-change effect to skip its reset, otherwise it would
+    // wipe the board we are about to set.
+    if (newRows !== rows || newCols !== cols) {
+      skipNextResetRef.current = true;
+    }
+    setRows(newRows);
+    setCols(newCols);
+    setBoard(scannedBoard);
+    setResults(null);
+    setScannerImage(null);
   }, [rows, cols]);
 
   // Keyboard shortcuts
