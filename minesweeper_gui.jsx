@@ -570,10 +570,13 @@ function ScannerModal({ image, gridRows, gridCols, onApply, onClose }) {
   }, [dragging, dragStart, rect, getPos]);
 
   const handleMouseUp = useCallback(() => {
+    // Only invalidate the preview when a drag actually changed the rect,
+    // not on any mouseup inside the modal (which would nuke the preview
+    // when clicking the Apply button).
+    if (dragging) setPreview(null);
     setDragging(null);
     setDragStart(null);
-    setPreview(null);
-  }, []);
+  }, [dragging]);
 
   const runDetection = useCallback(() => {
     if (!rect || !canvasRef.current) return;
