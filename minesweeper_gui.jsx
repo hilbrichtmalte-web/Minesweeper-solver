@@ -317,6 +317,11 @@ function analyzeCell(imageData, x, y, cellW, cellH) {
   let tR = 0, tG = 0, tB = 0, tCount = 0;
   let darkPixels = 0, colorPixels = 0;
   let maxColorR = 0, maxColorG = 0, maxColorB = 0;
+  // Saturation-weighted sums for the colour mean. High-sat glyph-core
+  // pixels dominate; mid-sat anti-alias edge pixels (which blend with
+  // the bluish background and would otherwise tip red 3s into pink 4s)
+  // contribute very little.
+  let wColorR = 0, wColorG = 0, wColorB = 0, wColorSum = 0;
   let hasRed = 0, hasGreen = 0, hasBlue = 0, hasPurple = 0;
 
   for (let py = tsy; py < tey; py++) {
@@ -330,7 +335,13 @@ function analyzeCell(imageData, x, y, cellW, cellH) {
         colorPixels++;
         maxColorR += r; maxColorG += g; maxColorB += b;
 
-        // Classify color of this pixel
+        // Squared margin above the noise floor → strongly weights pure
+        // glyph pixels over fringe ones.
+        const w = (sat - 40) * (sat - 40);
+        wColorR += r * w; wColorG += g * w; wColorB += b * w;
+        wColorSum += w;
+
+        // Classify color of this pixel (kept for the flag check)
         if (r > 150 && g < 100 && b < 100) hasRed++;
         if (g > 100 && r < 100 && b < 100) hasGreen++;
         if (b > 150 && r < 100 && g < 100) hasBlue++;
@@ -349,11 +360,14 @@ function analyzeCell(imageData, x, y, cellW, cellH) {
   const colorRatio = colorPixels / tCount;
   const darkRatio = darkPixels / tCount;
 
-  // Mean color of the saturated text pixels only. This is what tells red
-  // (low blue) apart from pink/purple (high blue) reliably.
-  const colAvgR = colorPixels > 0 ? maxColorR / colorPixels : 0;
-  const colAvgG = colorPixels > 0 ? maxColorG / colorPixels : 0;
-  const colAvgB = colorPixels > 0 ? maxColorB / colorPixels : 0;
+  // Saturation-weighted mean of the saturated pixels. This is the signal
+  // used to discriminate red (low B) from magenta (high B).
+  const colAvgR = wColorSum > 0 ? wColorR / wColorSum
+    : (colorPixels > 0 ? maxColorR / colorPixels : 0);
+  const colAvgG = wColorSum > 0 ? wColorG / wColorSum
+    : (colorPixels > 0 ? maxColorG / colorPixels : 0);
+  const colAvgB = wColorSum > 0 ? wColorB / wColorSum
+    : (colorPixels > 0 ? maxColorB / colorPixels : 0);
 
   // Sample the four cell corners to detect a 3D raised border: covered
   // tiles are brighter at the top-left and darker at the bottom-right.
