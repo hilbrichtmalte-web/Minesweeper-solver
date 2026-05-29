@@ -349,13 +349,40 @@ function analyzeCell(imageData, x, y, cellW, cellH) {
   const colorRatio = colorPixels / tCount;
   const darkRatio = darkPixels / tCount;
 
+  // Sample the four cell corners to detect a 3D raised border: covered
+  // tiles are brighter at the top-left and darker at the bottom-right.
+  // Revealed tiles are flat. This is theme-independent and discriminates
+  // covered vs revealed much more reliably than absolute brightness.
+  const cornerInset = Math.max(2, Math.floor(Math.min(cellW, cellH) * 0.08));
+  const cornerSize = Math.max(2, Math.floor(Math.min(cellW, cellH) * 0.18));
+  const sampleCornerBright = (cx, cy) => {
+    let sum = 0, n = 0;
+    const xEnd = cx + cornerSize, yEnd = cy + cornerSize;
+    for (let py = cy; py < yEnd; py++) {
+      for (let px = cx; px < xEnd; px++) {
+        const idx = (py * width + px) * 4;
+        sum += data[idx] + data[idx + 1] + data[idx + 2];
+        n++;
+      }
+    }
+    return n ? sum / (3 * n) : 0;
+  };
+  const tlBright = sampleCornerBright(Math.floor(x + cornerInset), Math.floor(y + cornerInset));
+  const trBright = sampleCornerBright(Math.floor(x + cellW - cornerInset - cornerSize), Math.floor(y + cornerInset));
+  const blBright = sampleCornerBright(Math.floor(x + cornerInset), Math.floor(y + cellH - cornerInset - cornerSize));
+  const brBright = sampleCornerBright(Math.floor(x + cellW - cornerInset - cornerSize), Math.floor(y + cellH - cornerInset - cornerSize));
+  // Positive = top-left brighter than bottom-right (raised look)
+  const raisedScore = (tlBright + trBright) / 2 - (blBright + brBright) / 2
+                    + (tlBright - brBright) * 0.5;
+
   return {
     type: "raw",
     avgR, avgG, avgB, avgBright, brightRange,
     textAvgR, textAvgG, textAvgB,
     colorRatio, darkRatio,
     hasRed, hasGreen, hasBlue, hasPurple,
-    colorPixels, darkPixels, tCount
+    colorPixels, darkPixels, tCount,
+    raisedScore, tlBright, brBright
   };
 }
 
@@ -364,42 +391,31 @@ function classifyCell(raw) {
 
   const { avgBright, brightRange, colorRatio, darkRatio,
     hasRed, hasGreen, hasBlue, hasPurple, colorPixels, tCount, darkPixels,
-    textAvgR, textAvgG, textAvgB, avgR, avgG, avgB } = raw;
+    textAvgR, textAvgG, textAvgB, avgR, avgG, avgB,
+    raisedScore } = raw;
 
-  // Covered/unknown cells: typically medium gray, relatively uniform, with 3D border effect
-  // They tend to have a specific brightness range and low color saturation
   const avgSat = Math.max(avgR, avgG, avgB) - Math.min(avgR, avgG, avgB);
 
-  // Very dark cell = covered/unknown (many minesweeper themes use dark for covered)
-  if (avgBright < 80 && avgSat < 30) return UNKNOWN;
-
-  // Medium gray, low saturation, moderate brightness range (3D effect) = covered
-  if (avgSat < 20 && avgBright > 100 && avgBright < 200 && brightRange > 30) return UNKNOWN;
-
-  // Check for flag: strong red presence on grayish background
+  // Flag: strong red on a (covered) background. Check before number-3 so
+  // a red flag glyph isn't misread as the red "3" number.
   if (hasRed > tCount * 0.08 && colorRatio > 0.05) {
-    // Flags have red pixels but also gray background
     const redDominance = hasRed / Math.max(1, hasGreen + hasBlue + hasPurple);
     if (redDominance > 2 && hasGreen < hasRed * 0.3) return FLAG;
   }
 
-  // Check for numbers by dominant text color
+  // Number detection by dominant saturated text color.
   if (colorPixels > 3) {
     const cr = hasRed, cg = hasGreen, cb = hasBlue, cp = hasPurple;
     const total = cr + cg + cb + cp;
-
     if (total > 2) {
-      if (cb > cg && cb > cr && cb > cp) return 1; // blue = 1
-      if (cg > cr && cg > cb && cg > cp) return 2; // green = 2
-      if (cr > cg && cr > cb && cr > cp && cr > cp) {
-        // Red could be 3 or flag – but we already checked for flag
-        return 3;
-      }
-      if (cp > cr && cp > cg && cp > cb) return 4; // purple = 4
+      if (cb > cg && cb > cr && cb > cp) return 1;
+      if (cg > cr && cg > cb && cg > cp) return 2;
+      if (cr > cg && cr > cb && cr > cp) return 3;
+      if (cp > cr && cp > cg && cp > cb) return 4;
     }
   }
 
-  // Check by text area average color (for subtle colors)
+  // Subtle text colors via the text-region average.
   const textSat = Math.max(textAvgR, textAvgG, textAvgB) - Math.min(textAvgR, textAvgG, textAvgB);
   if (textSat > 15 && colorRatio > 0.02) {
     if (textAvgB > textAvgR + 20 && textAvgB > textAvgG + 20) return 1;
@@ -408,15 +424,17 @@ function classifyCell(raw) {
     if (textAvgB > textAvgG + 10 && textAvgR > textAvgG + 5) return 4;
   }
 
-  // Dark text on light background = number (7 or 8)
+  // Dark glyph on a bright cell = 7 (or 8 — same color in most themes).
   if (darkRatio > 0.15 && avgBright > 150) return 7;
 
-  // Light, flat, no color = revealed empty
-  if (avgBright > 140 && avgSat < 20 && colorRatio < 0.02) return EMPTY;
-  if (avgBright > 100 && avgSat < 15 && brightRange < 40) return EMPTY;
+  // Primary covered-vs-revealed discriminator: 3D border. Covered tiles have
+  // a noticeable highlight on the top-left edge and shadow on the bottom-right.
+  // Revealed cells are flat. raisedScore > ~8 is a confident raised tile.
+  if (raisedScore > 8) return UNKNOWN;
 
-  // Fallback
-  if (avgBright < 120 && brightRange > 20) return UNKNOWN;
+  // Conservative fallbacks for themes where the gradient is faint.
+  if (avgSat < 30 && avgBright > 60 && avgBright < 200 && brightRange > 25) return UNKNOWN;
+
   return EMPTY;
 }
 
