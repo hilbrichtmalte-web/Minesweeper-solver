@@ -550,6 +550,74 @@ function detectGridSize(canvas, gridRect, fallbackRows, fallbackCols) {
   return { cols, rows };
 }
 
+// Locate the playing field inside the full screenshot by edge density.
+// The grid region has many cell borders → high per-pixel gradient. The
+// surrounding UI / dark margins are mostly flat. Returns the bounding
+// rectangle of the high-edge-density area, or null when nothing
+// distinguishable is found.
+function detectGridBounds(canvas) {
+  const W = canvas.width;
+  const H = canvas.height;
+  if (W < 32 || H < 32) return null;
+
+  const ctx = canvas.getContext("2d");
+  const img = ctx.getImageData(0, 0, W, H);
+  const { data } = img;
+
+  const rowEdge = new Float32Array(H);
+  const colEdge = new Float32Array(W);
+  for (let y = 1; y < H - 1; y++) {
+    for (let x = 1; x < W - 1; x++) {
+      const iL = (y * W + (x - 1)) * 4;
+      const iR = (y * W + (x + 1)) * 4;
+      const iU = ((y - 1) * W + x) * 4;
+      const iD = ((y + 1) * W + x) * 4;
+      const bL = data[iL] + data[iL + 1] + data[iL + 2];
+      const bR = data[iR] + data[iR + 1] + data[iR + 2];
+      const bU = data[iU] + data[iU + 1] + data[iU + 2];
+      const bD = data[iD] + data[iD + 1] + data[iD + 2];
+      const g = Math.abs(bR - bL) + Math.abs(bD - bU);
+      rowEdge[y] += g;
+      colEdge[x] += g;
+    }
+  }
+  for (let y = 0; y < H; y++) rowEdge[y] /= W;
+  for (let x = 0; x < W; x++) colEdge[x] /= H;
+
+  // Smooth to absorb single-pixel spikes (text inside game UI, decorative borders).
+  const smooth = (arr, K) => {
+    const n = arr.length;
+    const out = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      let s = 0, c = 0;
+      for (let k = -K; k <= K; k++) {
+        const j = i + k;
+        if (j >= 0 && j < n) { s += arr[j]; c++; }
+      }
+      out[i] = s / c;
+    }
+    return out;
+  };
+  const rowS = smooth(rowEdge, 6);
+  const colS = smooth(colEdge, 6);
+
+  let maxRow = 0, maxCol = 0;
+  for (let y = 0; y < H; y++) if (rowS[y] > maxRow) maxRow = rowS[y];
+  for (let x = 0; x < W; x++) if (colS[x] > maxCol) maxCol = colS[x];
+  if (maxRow < 1 || maxCol < 1) return null;
+
+  const rowT = maxRow * 0.25;
+  const colT = maxCol * 0.25;
+
+  let top = 0;       while (top < H && rowS[top] < rowT) top++;
+  let bottom = H - 1; while (bottom > top && rowS[bottom] < rowT) bottom--;
+  let left = 0;      while (left < W && colS[left] < colT) left++;
+  let right = W - 1;  while (right > left && colS[right] < colT) right--;
+
+  if (right - left < 32 || bottom - top < 32) return null;
+  return { x: left, y: top, w: right - left + 1, h: bottom - top + 1 };
+}
+
 function scanImage(canvas, gridRect, gridRows, gridCols) {
   const ctx = canvas.getContext("2d");
   const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
@@ -708,20 +776,40 @@ function ScannerModal({ image, gridRows, gridCols, onApply, onClose }) {
     setDragStart(null);
   }, [dragging]);
 
-  const runDetection = useCallback(() => {
-    if (!rect || !canvasRef.current) return;
+  // Shared body: scan the given rect, auto-detect rows/cols, show preview.
+  const scanRect = useCallback((targetRect) => {
+    if (!targetRect || !canvasRef.current) return false;
     const normalized = {
-      x: Math.min(rect.x, rect.x + rect.w),
-      y: Math.min(rect.y, rect.y + rect.h),
-      w: Math.abs(rect.w),
-      h: Math.abs(rect.h)
+      x: Math.min(targetRect.x, targetRect.x + targetRect.w),
+      y: Math.min(targetRect.y, targetRect.y + targetRect.h),
+      w: Math.abs(targetRect.w),
+      h: Math.abs(targetRect.h)
     };
     const detected = detectGridSize(canvasRef.current, normalized, gridRows, gridCols);
     const useRows = Math.max(1, Math.min(100, detected.rows));
     const useCols = Math.max(1, Math.min(100, detected.cols));
     const result = scanImage(canvasRef.current, normalized, useRows, useCols);
     setPreview({ ...result, rows: useRows, cols: useCols });
-  }, [rect, gridRows, gridCols]);
+    return true;
+  }, [gridRows, gridCols]);
+
+  const runDetection = useCallback(() => {
+    scanRect(rect);
+  }, [rect, scanRect]);
+
+  // One-click: find the field bounds in the screenshot, snap the rect
+  // to them, then run the normal detect/scan pipeline.
+  const autoDetectField = useCallback(() => {
+    if (!canvasRef.current) return;
+    const bounds = detectGridBounds(canvasRef.current);
+    if (!bounds) {
+      // Fall back to running detection on whatever rect already exists.
+      scanRect(rect);
+      return;
+    }
+    setRect(bounds);
+    scanRect(bounds);
+  }, [rect, scanRect]);
 
   const applyDetection = useCallback(() => {
     if (preview) onApply(preview.board);
@@ -743,10 +831,15 @@ function ScannerModal({ image, gridRows, gridCols, onApply, onClose }) {
         <div className="flex items-center gap-4">
           <span className="text-lg font-bold text-blue-400">Screenshot Scanner</span>
           <span className="text-xs text-gray-400">
-            Drag the rectangle to cover exactly the game grid. Then click Detect.
+            Click <span className="text-purple-300">Feld erkennen</span> for a one-shot auto-detect, or drag the rectangle manually and click Detect.
           </span>
         </div>
         <div className="flex items-center gap-2">
+          <button onClick={autoDetectField}
+            title="Find the playing field in the screenshot, snap the rectangle to it, and scan."
+            className="bg-purple-600 hover:bg-purple-500 text-white font-bold py-1.5 px-4 rounded text-sm">
+            Feld erkennen
+          </button>
           <button onClick={runDetection}
             className="bg-blue-600 hover:bg-blue-500 text-white font-bold py-1.5 px-4 rounded text-sm">
             Detect
