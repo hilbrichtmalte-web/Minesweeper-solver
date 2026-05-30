@@ -341,12 +341,14 @@ function analyzeCell(imageData, x, y, cellW, cellH) {
         wColorR += r * w; wColorG += g * w; wColorB += b * w;
         wColorSum += w;
 
-        // Classify color of this pixel (kept for the flag check)
+        // Classify color of this pixel (kept for the flag check).
+        // Note: orange/yellow pixels intentionally fall through none of
+        // the buckets so an orange "5" glyph cannot pump hasRed and
+        // trigger the flag detector.
         if (r > 150 && g < 100 && b < 100) hasRed++;
         if (g > 100 && r < 100 && b < 100) hasGreen++;
         if (b > 150 && r < 100 && g < 100) hasBlue++;
         if (b > 100 && r > 80 && g < 80) hasPurple++;
-        if (r > 120 && g > 80 && b < 60) hasRed++; // orange-red for 5
       }
       if (r + g + b < 200) darkPixels++;
     }
@@ -419,10 +421,13 @@ function classifyCell(raw) {
   const avgSat = Math.max(avgR, avgG, avgB) - Math.min(avgR, avgG, avgB);
 
   // Flag: strong red on a (covered) background. Check before number-3 so
-  // a red flag glyph isn't misread as the red "3" number.
+  // a red flag glyph isn't misread as the red "3" number. The mean
+  // glyph colour must also be pure red — guards against orange "5" or
+  // pink "4" pixels pumping hasRed.
   if (hasRed > tCount * 0.08 && colorRatio > 0.05) {
     const redDominance = hasRed / Math.max(1, hasGreen + hasBlue + hasPurple);
-    if (redDominance > 2 && hasGreen < hasRed * 0.3) return FLAG;
+    const meanIsPureRed = colAvgG < 110 && colAvgB < colAvgR * 0.55;
+    if (redDominance > 2 && hasGreen < hasRed * 0.3 && meanIsPureRed) return FLAG;
   }
 
   // Number detection by averaging the colour of all saturated text pixels.
